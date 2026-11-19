@@ -166,7 +166,7 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({
     }
 
     container.innerHTML = '';
-    const cloned = cloneAndTagSvgForPreview(parsedSvg.svgEl);
+    const cloned = document.importNode(cloneAndTagSvgForPreview(parsedSvg.svgEl), true);
     cloned.setAttribute('width', '100%');
     cloned.setAttribute('height', '100%');
     if (!cloned.getAttribute('viewBox')) {
@@ -175,8 +175,10 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({
         `${viewBox.x} ${viewBox.y} ${viewBox.width} ${viewBox.height}`
       );
     }
-    cloned.style.display = 'block';
-    cloned.style.overflow = 'visible';
+    if ('style' in cloned && cloned.style) {
+      cloned.style.display = 'block';
+      cloned.style.overflow = 'visible';
+    }
     container.appendChild(cloned);
     mountedSvgRef.current = cloned;
   }, [parsedSvg, viewBox.x, viewBox.y, viewBox.width, viewBox.height]);
@@ -190,8 +192,10 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({
     const padY = 88;
     const availW = Math.max(200, rect.width - padX);
     const availH = Math.max(200, rect.height - padY);
-    const fitZoom = Math.min(availW / viewBox.width, availH / viewBox.height, 1.5);
-    setZoom(roundNum(Math.max(0.2, fitZoom), 2));
+    const safeW = Math.max(1, viewBox.width || 800);
+    const safeH = Math.max(1, viewBox.height || 600);
+    const fitZoom = Math.min(availW / safeW, availH / safeH, 1.5);
+    setZoom(roundNum(Math.max(0.2, Number.isFinite(fitZoom) ? fitZoom : 1), 2));
     setPan({ x: 0, y: 0 });
   }, [viewBox.width, viewBox.height]);
 
@@ -260,19 +264,27 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({
   const clientToSvgPoint = useCallback(
     (clientX: number, clientY: number): { x: number; y: number } => {
       const svg = mountedSvgRef.current;
-      if (svg) {
-        const ctm = svg.getScreenCTM();
-        if (ctm) {
-          const pt = new DOMPoint(clientX, clientY).matrixTransform(ctm.inverse());
-          return { x: roundNum(pt.x), y: roundNum(pt.y) };
+      if (svg && typeof svg.getScreenCTM === 'function') {
+        try {
+          const ctm = svg.getScreenCTM();
+          if (ctm) {
+            const pt = new DOMPoint(clientX, clientY).matrixTransform(ctm.inverse());
+            if (Number.isFinite(pt.x) && Number.isFinite(pt.y)) {
+              return { x: roundNum(pt.x), y: roundNum(pt.y) };
+            }
+          }
+        } catch {
+          // Non-invertible CTM fallback
         }
       }
       const mount = svgMountRef.current;
       if (mount) {
         const r = mount.getBoundingClientRect();
-        const x = viewBox.x + ((clientX - r.left) / r.width) * viewBox.width;
-        const y = viewBox.y + ((clientY - r.top) / r.height) * viewBox.height;
-        return { x: roundNum(x), y: roundNum(y) };
+        if (r.width > 0 && r.height > 0) {
+          const x = viewBox.x + ((clientX - r.left) / r.width) * viewBox.width;
+          const y = viewBox.y + ((clientY - r.top) / r.height) * viewBox.height;
+          return { x: roundNum(x), y: roundNum(y) };
+        }
       }
       return { x: 0, y: 0 };
     },
@@ -879,7 +891,9 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({
     if (!svg) return;
     const allTagged = svg.querySelectorAll('[data-eid]');
     allTagged.forEach((el) => {
-      (el as SVGElement).style.translate = '';
+      if ('style' in el && (el as SVGElement).style) {
+        (el as SVGElement).style.translate = '';
+      }
     });
     if (drag.type === 'move' && (drag.dx !== 0 || drag.dy !== 0)) {
       const p0 = clientToSvgPoint(drag.startClientX, drag.startClientY);
@@ -888,7 +902,7 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({
       const dySvg = p1.y - p0.y;
       for (const eid of selectedEids) {
         const el = svg.querySelector(`[data-eid="${eid}"]`) as SVGElement | null;
-        if (el) {
+        if (el && 'style' in el && el.style) {
           el.style.translate = `${dxSvg}px ${dySvg}px`;
         }
       }
@@ -1015,7 +1029,7 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({
           className={`relative shadow-md border border-slate-300/90 ${backdropClass} shrink-0`}
         >
           {/* Mounted Live SVG */}
-          <div ref={svgMountRef} className="w-full h-full" />
+          <div ref={svgMountRef} className="w-full h-full svg-preview-scope" />
 
           {/* Live Drawing Ghost Overlay */}
           {(drag.type === 'draw' || polygonPoints.length > 0) && (

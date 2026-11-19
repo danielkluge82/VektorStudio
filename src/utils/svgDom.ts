@@ -37,7 +37,17 @@ function getTagName(el: Element): string {
   return el.localName || el.tagName.replace(/^.*:/, '');
 }
 
-function extractNodeInfo(el: Element, eid: string, depth: number): SvgNodeInfo {
+function isNonRenderableTag(tagName: string): boolean {
+  const lower = tagName.toLowerCase();
+  return NON_RENDERABLE_TAGS.has(lower) || lower.startsWith('fe');
+}
+
+function extractNodeInfo(
+  el: Element,
+  eid: string,
+  depth: number,
+  parentNonRenderable = false
+): SvgNodeInfo {
   const tagName = getTagName(el);
   const lowerTag = tagName.toLowerCase();
   const id = el.getAttribute('id') || '';
@@ -47,13 +57,14 @@ function extractNodeInfo(el: Element, eid: string, depth: number): SvgNodeInfo {
     attributes[attr.name] = attr.value;
   }
 
+  const selfNonRenderable = parentNonRenderable || isNonRenderableTag(lowerTag);
   const isContainer = CONTAINER_TAGS.has(lowerTag);
-  const isRenderable = !NON_RENDERABLE_TAGS.has(lowerTag);
+  const isRenderable = !selfNonRenderable;
 
   const children: SvgNodeInfo[] = [];
   for (let i = 0; i < el.children.length; i++) {
     const childEid = eid ? `${eid}.${i}` : `${i}`;
-    children.push(extractNodeInfo(el.children[i], childEid, depth + 1));
+    children.push(extractNodeInfo(el.children[i], childEid, depth + 1, selfNonRenderable));
   }
 
   const label = id ? `${tagName} #${id}` : tagName;
@@ -90,7 +101,12 @@ export function parseViewBox(svgEl: Element): SvgViewBox {
       .trim()
       .split(/[\s,]+/)
       .map((v) => parseFloat(v));
-    if (parts.length === 4 && parts.every((n) => !Number.isNaN(n)) && parts[2] > 0 && parts[3] > 0) {
+    if (
+      parts.length === 4 &&
+      parts.every((n) => Number.isFinite(n)) &&
+      parts[2] > 0 &&
+      parts[3] > 0
+    ) {
       return { x: parts[0], y: parts[1], width: parts[2], height: parts[3] };
     }
   }
@@ -99,9 +115,22 @@ export function parseViewBox(svgEl: Element): SvgViewBox {
   return {
     x: 0,
     y: 0,
-    width: !Number.isNaN(w) && w > 0 ? w : 800,
-    height: !Number.isNaN(h) && h > 0 ? h : 600,
+    width: Number.isFinite(w) && w > 0 ? w : 800,
+    height: Number.isFinite(h) && h > 0 ? h : 600,
   };
+}
+
+function ensureSvgXmlns(svgMarkup: string): string {
+  return svgMarkup.replace(/<svg\b((?:"[^"]*"|'[^']*'|[^>"'])*)>/i, (_full, attrs: string) => {
+    if (/\bxmlns\s*=/i.test(attrs)) {
+      const fixedAttrs = attrs.replace(
+        /\bxmlns\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/i,
+        `xmlns="${SVG_NS}"`
+      );
+      return `<svg${fixedAttrs}>`;
+    }
+    return `<svg xmlns="${SVG_NS}"${attrs}>`;
+  });
 }
 
 export function parseSvgCode(rawCode: string): ParsedSvgResult {
@@ -121,8 +150,21 @@ export function parseSvgCode(rawCode: string): ParsedSvgResult {
   }
 
   const parser = new DOMParser();
-  const doc = parser.parseFromString(trimmed, 'image/svg+xml');
-  const parserError = doc.querySelector('parsererror');
+  let doc = parser.parseFromString(trimmed, 'image/svg+xml');
+  let parserError = doc.querySelector('parsererror');
+
+  // If pasted inline HTML <svg> omitted xmlns, re-parse with SVG namespace so elements become real SVGElements
+  if (!parserError && doc.documentElement && getTagName(doc.documentElement).toLowerCase() === 'svg') {
+    if (doc.documentElement.namespaceURI !== SVG_NS) {
+      const withNs = ensureSvgXmlns(trimmed);
+      const nsDoc = parser.parseFromString(withNs, 'image/svg+xml');
+      if (!nsDoc.querySelector('parsererror')) {
+        doc = nsDoc;
+        parserError = null;
+      }
+    }
+  }
+
   if (parserError) {
     const errText = parserError.textContent?.split('\n')[0]?.trim() || 'Ungültige XML/SVG-Syntax.';
     return {
@@ -188,16 +230,23 @@ function serializeElementPretty(el: Element, indentLevel: number): string {
   const indent = '  '.repeat(indentLevel);
   const tagName = getTagName(el);
 
+  const isRootSvg = indentLevel === 0 && tagName.toLowerCase() === 'svg';
+  let hasXmlns = false;
   const attrs: string[] = [];
   for (let i = 0; i < el.attributes.length; i++) {
     const attr = el.attributes[i];
     // Strip editor-internal attributes if any ever slipped in
     if (attr.name === 'data-eid') continue;
+    if (isRootSvg && attr.name.toLowerCase() === 'xmlns') {
+      attrs.push(`xmlns="${SVG_NS}"`);
+      hasXmlns = true;
+      continue;
+    }
     attrs.push(`${attr.name}="${escapeXmlAttr(attr.value)}"`);
   }
 
-  // Ensure root <svg> always includes xmlns
-  if (indentLevel === 0 && tagName.toLowerCase() === 'svg' && !el.hasAttribute('xmlns')) {
+  // Ensure root <svg> always includes valid SVG xmlns
+  if (isRootSvg && !hasXmlns) {
     attrs.unshift(`xmlns="${SVG_NS}"`);
   }
 
@@ -563,12 +612,27 @@ export function insertSvgElementsInCode(
 
     // If pasted item is a full <svg>...</svg>, unwrap its renderable children & merge defs
     if (/^<(?:<\?xml[\s\S]*\?>\s*)?<svg\b/i.test(trimmed) || /<svg\b/i.test(trimmed)) {
-      const subDoc = parser.parseFromString(trimmed, 'image/svg+xml');
-      if (!subDoc.querySelector('parsererror') && getTagName(subDoc.documentElement).toLowerCase() === 'svg') {
+      let subDoc = parser.parseFromString(trimmed, 'image/svg+xml');
+      if (
+        !subDoc.querySelector('parsererror') &&
+        subDoc.documentElement &&
+        getTagName(subDoc.documentElement).toLowerCase() === 'svg' &&
+        subDoc.documentElement.namespaceURI !== SVG_NS
+      ) {
+        const nsSubDoc = parser.parseFromString(ensureSvgXmlns(trimmed), 'image/svg+xml');
+        if (!nsSubDoc.querySelector('parsererror')) {
+          subDoc = nsSubDoc;
+        }
+      }
+      if (
+        !subDoc.querySelector('parsererror') &&
+        subDoc.documentElement &&
+        getTagName(subDoc.documentElement).toLowerCase() === 'svg'
+      ) {
         const subChildren = Array.from(subDoc.documentElement.children);
         for (const child of subChildren) {
           const imported = parsed.doc.importNode(child, true) as Element;
-          if (!NON_RENDERABLE_TAGS.has(getTagName(imported).toLowerCase())) {
+          if (!isNonRenderableTag(getTagName(imported))) {
             if (offsetX !== 0 || offsetY !== 0) {
               translateElement(imported, offsetX, offsetY);
             }
@@ -590,12 +654,12 @@ export function insertSvgElementsInCode(
         const imported = parsed.doc.importNode(child, true) as Element;
         if (
           (offsetX !== 0 || offsetY !== 0) &&
-          !NON_RENDERABLE_TAGS.has(getTagName(imported).toLowerCase())
+          !isNonRenderableTag(getTagName(imported))
         ) {
           translateElement(imported, offsetX, offsetY);
         }
         parsed.svgEl.appendChild(imported);
-        if (!NON_RENDERABLE_TAGS.has(getTagName(imported).toLowerCase())) {
+        if (!isNonRenderableTag(getTagName(imported))) {
           insertedEls.push(imported);
         }
       }
@@ -791,9 +855,26 @@ export function updateSvgRootAttributes(
 export function cloneAndTagSvgForPreview(svgEl: SVGSVGElement): SVGSVGElement {
   const clone = svgEl.cloneNode(true) as SVGSVGElement;
 
-  // Sanitize any <script> or inline event handlers for safe live preview
+  // Strip inline event handlers on the root <svg> itself
+  for (const attr of Array.from(clone.attributes)) {
+    if (attr.name.toLowerCase().startsWith('on')) {
+      clone.removeAttribute(attr.name);
+    }
+  }
+
+  // Sanitize any <script> tags
   const scripts = clone.querySelectorAll('script');
   scripts.forEach((s) => s.remove());
+
+  // Scope <style> tags inside the pasted SVG so rules like `path { fill: ... }`
+  // or `svg { ... }` never leak out onto the editor UI or toolbar icons
+  const styles = clone.querySelectorAll('style');
+  styles.forEach((styleEl) => {
+    const css = styleEl.textContent || '';
+    if (css.trim()) {
+      styleEl.textContent = `.svg-preview-scope { ${css} }`;
+    }
+  });
 
   function tagChildren(parent: Element, prefix: string) {
     for (let i = 0; i < parent.children.length; i++) {

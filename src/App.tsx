@@ -32,7 +32,7 @@ import { ExportModal } from './components/ExportModal';
 
 const INITIAL_CODE = SVG_TEMPLATES[0].code;
 
-export default function App() {
+function AppContent() {
   const [history, setHistory] = useState<string[]>([INITIAL_CODE]);
   const [historyIdx, setHistoryIdx] = useState(0);
   const code = history[historyIdx] ?? INITIAL_CODE;
@@ -595,3 +595,56 @@ export default function App() {
     </div>
   );
 }
+
+class SvgErrorBoundary extends React.Component<
+  { children: React.ReactNode; onReset: () => void },
+  { error: Error | null }
+> {
+  constructor(props: { children: React.ReactNode; onReset: () => void }) {
+    super(props);
+    this.state = { error: null };
+  }
+
+  static getDerivedStateFromError(error: Error) {
+    return { error };
+  }
+
+  render() {
+    if (this.state.error) {
+      return (
+        <div className="h-screen w-screen flex items-center justify-center bg-[#F3F4F6] p-6">
+          <div className="max-w-md w-full bg-white border border-slate-200 rounded-xl shadow-lg p-6 space-y-4">
+            <h1 className="text-base font-semibold text-slate-900">
+              Fehler bei der SVG-Darstellung
+            </h1>
+            <p className="text-xs text-slate-600 leading-relaxed">
+              Der eingefügte Code hat einen unerwarteten Darstellungsfehler ausgelöst:{' '}
+              <span className="font-mono text-red-600">{this.state.error.message}</span>
+            </p>
+            <button
+              type="button"
+              onClick={() => {
+                this.setState({ error: null });
+                this.props.onReset();
+              }}
+              className="px-4 py-2 text-xs font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg cursor-pointer"
+            >
+              Zurück zur Standard-Vorlage
+            </button>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+export default function App() {
+  const [resetKey, setResetKey] = useState(0);
+  return (
+    <SvgErrorBoundary onReset={() => setResetKey((k) => k + 1)}>
+      <AppContent key={resetKey} />
+    </SvgErrorBoundary>
+  );
+}
+
