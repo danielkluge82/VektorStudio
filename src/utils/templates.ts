@@ -39,10 +39,17 @@ export const SVG_TEMPLATES: SvgTemplate[] = [
   },
   {
     id: 'blank',
-    name: 'Leere Zeichenfläche',
-    description: 'Saubere 800×600 Zeichenfläche für freie Zeichnungen',
+    name: 'Leere Zeichenfläche (Weiß)',
+    description: 'Saubere 800×600 Zeichenfläche mit weißem Hintergrund',
     code: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 600" width="800" height="600">
   <rect x="0" y="0" width="800" height="600" fill="#FFFFFF" />
+</svg>`,
+  },
+  {
+    id: 'transparent-tracing',
+    name: 'Transparente Fläche (Abpauschen)',
+    description: 'Durchsichtige Zeichenfläche — ideal für Pausvorlagen darunter',
+    code: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 600" width="800" height="600">
 </svg>`,
   },
   {

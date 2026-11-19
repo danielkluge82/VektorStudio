@@ -12,6 +12,13 @@ import {
   ArrowDown,
   Group,
   Ungroup,
+  Image as ImageIcon,
+  Eye,
+  EyeOff,
+  Lock,
+  Unlock,
+  Upload,
+  RotateCcw,
 } from 'lucide-react';
 import {
   CanvasBackdrop,
@@ -20,6 +27,7 @@ import {
   ScreenBox,
   SvgUserBox,
   ToolType,
+  TracingImageState,
 } from '../types/svg';
 import {
   cloneAndTagSvgForPreview,
@@ -52,11 +60,19 @@ interface CanvasStageProps {
   onUngroup: () => void;
   hasClipboard: boolean;
   onSwitchToSelect: () => void;
+  tracingImage: TracingImageState | null;
+  onLoadTracingFile: (file: File) => void;
+  onPasteTracingClipboard: () => void;
+  onUpdateTracing: (partial: Partial<TracingImageState>) => void;
+  onResetTracingTransform: () => void;
+  onClearTracing: () => void;
+  onStartTransparentCanvas: (matchImageSize?: boolean) => void;
 }
 
 type DragMode =
   | { type: 'none' }
   | { type: 'pan'; startX: number; startY: number; origPanX: number; origPanY: number }
+  | { type: 'trace'; startClientX: number; startClientY: number; origOffsetX: number; origOffsetY: number }
   | { type: 'move'; startClientX: number; startClientY: number; dx: number; dy: number }
   | {
       type: 'marquee';
@@ -128,14 +144,24 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({
   onUngroup,
   hasClipboard,
   onSwitchToSelect,
+  tracingImage,
+  onLoadTracingFile,
+  onPasteTracingClipboard,
+  onUpdateTracing,
+  onResetTracingTransform,
+  onClearTracing,
+  onStartTransparentCanvas,
 }) => {
   const stageRef = useRef<HTMLDivElement>(null);
   const svgMountRef = useRef<HTMLDivElement>(null);
   const mountedSvgRef = useRef<SVGSVGElement | null>(null);
+  const tracingPopoverRef = useRef<HTMLDivElement>(null);
+  const tracingFileInputRef = useRef<HTMLInputElement>(null);
 
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [spacePressed, setSpacePressed] = useState(false);
+  const [tracingOpen, setTracingOpen] = useState(false);
 
   const [drag, setDrag] = useState<DragMode>({ type: 'none' });
   const [polygonPoints, setPolygonPoints] = useState<Array<{ x: number; y: number }>>([]);
@@ -153,6 +179,17 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({
   const [hoveredBox, setHoveredBox] = useState<{ box: ScreenBox; label: string } | null>(null);
 
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
+
+  useEffect(() => {
+    if (!tracingOpen) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      if (tracingPopoverRef.current && !tracingPopoverRef.current.contains(e.target as Node)) {
+        setTracingOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [tracingOpen]);
 
   const { viewBox } = parsedSvg;
 
@@ -426,6 +463,19 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({
 
     if (e.button !== 0) return;
 
+    // Unlocked tracing image positioning mode: drag anywhere on stage to align reference photo
+    if (tracingImage && tracingImage.visible && !tracingImage.locked) {
+      e.currentTarget.setPointerCapture(e.pointerId);
+      setDrag({
+        type: 'trace',
+        startClientX: e.clientX,
+        startClientY: e.clientY,
+        origOffsetX: tracingImage.offsetX,
+        origOffsetY: tracingImage.offsetY,
+      });
+      return;
+    }
+
     // Select & Move tool
     if (activeTool === 'select') {
       const hitEid = hitTestEid(e.clientX, e.clientY);
@@ -519,6 +569,16 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({
       setPan({
         x: drag.origPanX + (e.clientX - drag.startX),
         y: drag.origPanY + (e.clientY - drag.startY),
+      });
+      return;
+    }
+
+    if (drag.type === 'trace') {
+      const p0 = clientToSvgPoint(drag.startClientX, drag.startClientY);
+      const p1 = clientToSvgPoint(e.clientX, e.clientY);
+      onUpdateTracing({
+        offsetX: roundNum(drag.origOffsetX + (p1.x - p0.x), 1),
+        offsetY: roundNum(drag.origOffsetY + (p1.y - p0.y), 1),
       });
       return;
     }
@@ -916,13 +976,26 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({
 
   const cursorStyle = spacePressed
     ? 'grab'
-    : drag.type === 'pan'
+    : drag.type === 'pan' || drag.type === 'trace'
     ? 'grabbing'
+    : tracingImage && tracingImage.visible && !tracingImage.locked
+    ? 'move'
     : activeTool === 'select'
     ? 'default'
     : activeTool === 'text'
     ? 'text'
     : 'crosshair';
+
+  const hasOpaqueBackgroundRect = parsedSvg.nodes.some((n) => {
+    if (n.tagName.toLowerCase() !== 'rect') return false;
+    const fill = (n.attributes.fill || '#000').trim().toLowerCase();
+    if (fill === 'none' || fill === 'transparent') return false;
+    const w = n.attributes.width || '';
+    const h = n.attributes.height || '';
+    const wNum = w.endsWith('%') ? (parseFloat(w) / 100) * viewBox.width : parseFloat(w) || 0;
+    const hNum = h.endsWith('%') ? (parseFloat(h) / 100) * viewBox.height : parseFloat(h) || 0;
+    return wNum >= viewBox.width * 0.8 && hNum >= viewBox.height * 0.8;
+  });
 
   return (
     <section
@@ -930,13 +1003,17 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({
       className="flex-1 flex flex-col h-full bg-[#ECEEF2] relative min-w-0 select-none overflow-hidden"
     >
       {/* Top Canvas Micro-Bar */}
-      <div className="h-10 shrink-0 px-3 bg-white border-b border-slate-200 flex items-center justify-between gap-3 z-10">
+      <div className="h-10 shrink-0 px-3 bg-white border-b border-slate-200 flex items-center justify-between gap-3 z-20 relative">
         <div className="flex items-center gap-2 text-xs text-slate-500 min-w-0">
           <span className="font-mono tabular-nums text-slate-700 font-medium whitespace-nowrap">
             {viewBox.width} × {viewBox.height}
           </span>
           <span aria-hidden="true">·</span>
-          {selectedEids.length > 0 ? (
+          {tracingImage && tracingImage.visible && !tracingImage.locked ? (
+            <span className="text-amber-700 font-medium truncate">
+              Pausvorlage ausrichten · Ziehen zum Verschieben
+            </span>
+          ) : selectedEids.length > 0 ? (
             <span className="text-blue-700 font-medium whitespace-nowrap">
               {selectedEids.length === 1
                 ? `1 Element markiert`
@@ -953,8 +1030,303 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({
           )}
         </div>
 
-        {/* Backdrop & Zoom Controls */}
+        {/* Tracing Underlay, Backdrop & Zoom Controls */}
         <div className="flex items-center gap-2 shrink-0">
+          {/* Abpauschen (Tracing Underlay) Popover Trigger & Quick Actions */}
+          <div className="relative flex items-center gap-1" ref={tracingPopoverRef}>
+            <input
+              ref={tracingFileInputRef}
+              type="file"
+              accept="image/png,image/jpeg,image/webp,image/gif,image/bmp,image/svg+xml"
+              className="hidden"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) {
+                  onLoadTracingFile(file);
+                  e.target.value = '';
+                }
+              }}
+            />
+
+            <button
+              type="button"
+              onClick={() => setTracingOpen((v) => !v)}
+              title="Bild als Pausvorlage unter die Zeichenfläche legen"
+              className={`flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-medium rounded-md border transition-colors cursor-pointer whitespace-nowrap ${
+                tracingImage
+                  ? 'bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100/80'
+                  : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
+              }`}
+            >
+              <ImageIcon className="w-3.5 h-3.5" />
+              <span>Abpauschen</span>
+              {tracingImage && (
+                <span className="font-mono tabular-nums text-[10px] text-blue-600">
+                  {Math.round(tracingImage.opacity * 100)}%
+                </span>
+              )}
+            </button>
+
+            {tracingImage && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => onUpdateTracing({ visible: !tracingImage.visible })}
+                  title={tracingImage.visible ? 'Pausvorlage ausblenden' : 'Pausvorlage einblenden'}
+                  className={`p-1 rounded-md border transition-colors cursor-pointer ${
+                    tracingImage.visible
+                      ? 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
+                      : 'bg-slate-100 text-slate-400 border-slate-200 hover:text-slate-700'
+                  }`}
+                >
+                  {tracingImage.visible ? (
+                    <Eye className="w-3.5 h-3.5" />
+                  ) : (
+                    <EyeOff className="w-3.5 h-3.5" />
+                  )}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onUpdateTracing({ locked: !tracingImage.locked })}
+                  title={
+                    tracingImage.locked
+                      ? 'Pausvorlage entsperren (per Maus verschieben)'
+                      : 'Pausvorlage fixieren (wieder normal zeichnen)'
+                  }
+                  className={`p-1 rounded-md border transition-colors cursor-pointer ${
+                    !tracingImage.locked
+                      ? 'bg-amber-50 text-amber-700 border-amber-300'
+                      : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+                  }`}
+                >
+                  {tracingImage.locked ? (
+                    <Lock className="w-3.5 h-3.5" />
+                  ) : (
+                    <Unlock className="w-3.5 h-3.5" />
+                  )}
+                </button>
+              </>
+            )}
+
+            {tracingOpen && (
+              <div
+                onPointerDown={(e) => e.stopPropagation()}
+                onPaste={(e) => {
+                  const items = e.clipboardData?.items;
+                  if (!items) return;
+                  for (let i = 0; i < items.length; i++) {
+                    if (items[i].type.startsWith('image/')) {
+                      const file = items[i].getAsFile();
+                      if (file) {
+                        e.preventDefault();
+                        onLoadTracingFile(file);
+                        return;
+                      }
+                    }
+                  }
+                }}
+                className="absolute right-0 top-full mt-2 w-80 bg-white border border-slate-200 rounded-xl shadow-xl p-4 z-50 space-y-3.5 text-xs text-slate-700"
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <div>
+                    <div className="font-semibold text-slate-900">Pausvorlage (Leuchttisch)</div>
+                    <div className="text-[11px] text-slate-500">
+                      Liegt unter dem SVG · wird nicht exportiert
+                    </div>
+                  </div>
+                  {tracingImage && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onClearTracing();
+                      }}
+                      title="Pausvorlage entfernen"
+                      className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-md cursor-pointer"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+
+                {!tracingImage ? (
+                  <div className="space-y-2">
+                    <button
+                      type="button"
+                      onClick={() => tracingFileInputRef.current?.click()}
+                      className="w-full flex items-center justify-center gap-2 px-3 py-2.5 text-xs font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors cursor-pointer"
+                    >
+                      <Upload className="w-3.5 h-3.5" />
+                      <span>Bild laden (PNG, JPG, WebP)</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={onPasteTracingClipboard}
+                      className="w-full flex items-center justify-center gap-2 px-3 py-2 text-xs font-medium text-slate-700 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-lg transition-colors cursor-pointer"
+                    >
+                      <ClipboardPaste className="w-3.5 h-3.5" />
+                      <span>Aus Zwischenablage einfügen</span>
+                    </button>
+                    <p className="text-[11px] text-slate-500 leading-relaxed pt-0.5">
+                      Tipp: Du kannst ein Foto oder einen Screenshot auch direkt per Drag &amp; Drop auf die Zeichenfläche ziehen.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between gap-2 px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg">
+                      <div className="min-w-0">
+                        <div className="text-[11px] font-medium text-slate-800 truncate">
+                          {tracingImage.name}
+                        </div>
+                        <div className="text-[10px] font-mono tabular-nums text-slate-500">
+                          {tracingImage.naturalWidth} × {tracingImage.naturalHeight} px
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => tracingFileInputRef.current?.click()}
+                        className="px-2 py-1 text-[11px] font-medium text-slate-700 bg-white border border-slate-200 hover:bg-slate-100 rounded cursor-pointer shrink-0"
+                      >
+                        Ersetzen
+                      </button>
+                    </div>
+
+                    {hasOpaqueBackgroundRect && tracingImage.visible && (
+                      <div className="p-2.5 bg-amber-50 border border-amber-200 rounded-lg space-y-1.5">
+                        <p className="text-[11px] text-amber-900 leading-snug">
+                          Ein deckendes Hintergrund-Rechteck im SVG verdeckt deine Pausvorlage.
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => onStartTransparentCanvas(true)}
+                          className="w-full px-2.5 py-1.5 text-[11px] font-medium text-amber-950 bg-amber-200/80 hover:bg-amber-200 rounded-md cursor-pointer"
+                        >
+                          Transparente Zeichenfläche erstellen
+                        </button>
+                      </div>
+                    )}
+
+                    <label className="block">
+                      <div className="flex items-center justify-between text-[11px] text-slate-600 mb-1">
+                        <span>Deckkraft (Durchsicht)</span>
+                        <span className="font-mono tabular-nums font-medium">
+                          {Math.round(tracingImage.opacity * 100)}%
+                        </span>
+                      </div>
+                      <input
+                        type="range"
+                        min={0.05}
+                        max={1}
+                        step={0.05}
+                        value={tracingImage.opacity}
+                        onChange={(e) => onUpdateTracing({ opacity: parseFloat(e.target.value) })}
+                        className="w-full accent-blue-600 cursor-pointer"
+                      />
+                    </label>
+
+                    <label className="block">
+                      <div className="flex items-center justify-between text-[11px] text-slate-600 mb-1">
+                        <span>Bild-Skalierung</span>
+                        <span className="font-mono tabular-nums font-medium">
+                          {Math.round(tracingImage.scale * 100)}%
+                        </span>
+                      </div>
+                      <input
+                        type="range"
+                        min={0.2}
+                        max={3}
+                        step={0.05}
+                        value={tracingImage.scale}
+                        onChange={(e) => onUpdateTracing({ scale: parseFloat(e.target.value) })}
+                        className="w-full accent-blue-600 cursor-pointer"
+                      />
+                    </label>
+
+                    <div className="grid grid-cols-2 gap-2">
+                      <label className="block">
+                        <span className="text-[11px] text-slate-500">Versatz X</span>
+                        <input
+                          type="number"
+                          step={5}
+                          value={tracingImage.offsetX}
+                          onChange={(e) =>
+                            onUpdateTracing({ offsetX: parseFloat(e.target.value) || 0 })
+                          }
+                          className="mt-0.5 w-full px-2 py-1 text-xs font-mono tabular-nums border border-slate-200 rounded-md"
+                        />
+                      </label>
+                      <label className="block">
+                        <span className="text-[11px] text-slate-500">Versatz Y</span>
+                        <input
+                          type="number"
+                          step={5}
+                          value={tracingImage.offsetY}
+                          onChange={(e) =>
+                            onUpdateTracing({ offsetY: parseFloat(e.target.value) || 0 })
+                          }
+                          className="mt-0.5 w-full px-2 py-1 text-xs font-mono tabular-nums border border-slate-200 rounded-md"
+                        />
+                      </label>
+                    </div>
+
+                    <div className="flex items-center gap-1.5 pt-0.5">
+                      <button
+                        type="button"
+                        onClick={() => onUpdateTracing({ grayscale: !tracingImage.grayscale })}
+                        className={`flex-1 px-2.5 py-1.5 text-[11px] font-medium rounded-md border transition-colors cursor-pointer ${
+                          tracingImage.grayscale
+                            ? 'bg-slate-900 text-white border-slate-900'
+                            : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
+                        }`}
+                      >
+                        S/W-Kontrast
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => onUpdateTracing({ locked: !tracingImage.locked })}
+                        className={`flex-1 flex items-center justify-center gap-1 px-2.5 py-1.5 text-[11px] font-medium rounded-md border transition-colors cursor-pointer ${
+                          !tracingImage.locked
+                            ? 'bg-amber-50 text-amber-800 border-amber-300'
+                            : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
+                        }`}
+                      >
+                        {tracingImage.locked ? (
+                          <>
+                            <Unlock className="w-3 h-3" />
+                            <span>Ausrichten</span>
+                          </>
+                        ) : (
+                          <>
+                            <Lock className="w-3 h-3" />
+                            <span>Fixieren</span>
+                          </>
+                        )}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={onResetTracingTransform}
+                        title="Position & Größe zurücksetzen"
+                        className="p-1.5 text-slate-600 bg-white border border-slate-200 hover:bg-slate-50 rounded-md cursor-pointer"
+                      >
+                        <RotateCcw className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+
+                    <div className="border-t border-slate-100 pt-2.5 flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => onStartTransparentCanvas(true)}
+                        title="Erstellt eine leere transparente Zeichenfläche passend zum Seitenverhältnis des Bildes"
+                        className="flex-1 px-2.5 py-1.5 text-[11px] font-medium text-slate-700 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-md cursor-pointer"
+                      >
+                        Transparente Fläche (Bildformat)
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
           <div className="flex items-center gap-0.5 p-0.5 bg-slate-100 rounded-md border border-slate-200">
             {BACKDROP_OPTIONS.map((opt) => (
               <button
@@ -1019,6 +1391,24 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({
         style={{ cursor: cursorStyle }}
         className="flex-1 relative overflow-hidden flex items-center justify-center"
       >
+        {/* Unlocked Tracing Alignment Bar */}
+        {tracingImage && tracingImage.visible && !tracingImage.locked && (
+          <div
+            onPointerDown={(e) => e.stopPropagation()}
+            className="absolute bottom-4 left-1/2 -translate-x-1/2 z-40 flex items-center gap-2.5 px-3 py-1.5 bg-slate-900/95 text-white text-xs rounded-lg shadow-lg"
+          >
+            <span>Pausvorlage auf der Fläche ziehen zum Ausrichten</span>
+            <button
+              type="button"
+              onClick={() => onUpdateTracing({ locked: true })}
+              className="flex items-center gap-1 px-2.5 py-1 bg-blue-600 hover:bg-blue-500 text-white text-[11px] font-medium rounded-md cursor-pointer"
+            >
+              <Lock className="w-3 h-3" />
+              <span>Fixieren &amp; Zeichnen</span>
+            </button>
+          </div>
+        )}
+
         {/* Artboard Container */}
         <div
           style={{
@@ -1028,8 +1418,39 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({
           }}
           className={`relative shadow-md border border-slate-300/90 ${backdropClass} shrink-0`}
         >
+          {/* Tracing Reference Image Underlay (strictly beneath the SVG, never exported) */}
+          {tracingImage && tracingImage.visible && (() => {
+            const safeW = Math.max(1, tracingImage.naturalWidth || 800);
+            const safeH = Math.max(1, tracingImage.naturalHeight || 600);
+            const fitScale = Math.min(viewBox.width / safeW, viewBox.height / safeH);
+            const drawW = safeW * fitScale * tracingImage.scale;
+            const drawH = safeH * fitScale * tracingImage.scale;
+            const leftSvg = (viewBox.width - drawW) / 2 + tracingImage.offsetX;
+            const topSvg = (viewBox.height - drawH) / 2 + tracingImage.offsetY;
+            return (
+              <div className="absolute inset-0 overflow-hidden pointer-events-none z-0">
+                <img
+                  src={tracingImage.src}
+                  alt={tracingImage.name}
+                  draggable={false}
+                  style={{
+                    position: 'absolute',
+                    left: `${leftSvg * zoom}px`,
+                    top: `${topSvg * zoom}px`,
+                    width: `${drawW * zoom}px`,
+                    height: `${drawH * zoom}px`,
+                    opacity: tracingImage.opacity,
+                    filter: tracingImage.grayscale ? 'grayscale(100%) contrast(1.08)' : undefined,
+                    maxWidth: 'none',
+                    maxHeight: 'none',
+                  }}
+                />
+              </div>
+            );
+          })()}
+
           {/* Mounted Live SVG */}
-          <div ref={svgMountRef} className="w-full h-full svg-preview-scope" />
+          <div ref={svgMountRef} className="relative z-10 w-full h-full svg-preview-scope" />
 
           {/* Live Drawing Ghost Overlay */}
           {(drag.type === 'draw' || polygonPoints.length > 0) && (

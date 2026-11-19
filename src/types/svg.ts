@@ -73,3 +73,17 @@ export interface HtmlExportOptions {
   responsive: boolean;
   includeReset: boolean;
 }
+
+export interface TracingImageState {
+  src: string;
+  name: string;
+  naturalWidth: number;
+  naturalHeight: number;
+  visible: boolean;
+  opacity: number;
+  grayscale: boolean;
+  scale: number;
+  offsetX: number;
+  offsetY: number;
+  locked: boolean;
+}

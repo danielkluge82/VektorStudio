@@ -4,6 +4,7 @@ import {
   PaintStyle,
   SvgUserBox,
   ToolType,
+  TracingImageState,
   WorkspaceLayout,
 } from './types/svg';
 import { SVG_TEMPLATES, SvgTemplate } from './utils/templates';
@@ -60,6 +61,7 @@ function AppContent() {
 
   const [importOpen, setImportOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
+  const [tracingImage, setTracingImage] = useState<TracingImageState | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
   const showNotice = useCallback((msg: string) => {
@@ -153,9 +155,66 @@ function AppContent() {
     showNotice(`${items.length} ${items.length === 1 ? 'Element' : 'Elemente'} ausgeschnitten`);
   }, [code, selectedEids, commitCode, showNotice]);
 
+  const loadTracingFromFile = useCallback(
+    (file: File) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        if (typeof reader.result !== 'string') return;
+        const dataUrl = reader.result;
+        const img = new Image();
+        img.onload = () => {
+          setTracingImage({
+            src: dataUrl,
+            name: file.name || 'Pausvorlage',
+            naturalWidth: img.naturalWidth || 800,
+            naturalHeight: img.naturalHeight || 600,
+            visible: true,
+            opacity: 0.45,
+            grayscale: false,
+            scale: 1,
+            offsetX: 0,
+            offsetY: 0,
+            locked: true,
+          });
+          showNotice(`„${file.name || 'Bild'}“ als Pausvorlage geladen`);
+        };
+        img.onerror = () => {
+          showNotice('Bild konnte nicht geladen werden');
+        };
+        img.src = dataUrl;
+      };
+      reader.readAsDataURL(file);
+    },
+    [showNotice]
+  );
+
+  const pasteTracingFromClipboard = useCallback(async () => {
+    try {
+      if (typeof navigator.clipboard?.read !== 'function') {
+        showNotice('Zwischenablage-Bildzugriff hier nicht unterstützt — bitte Datei wählen oder per Drag & Drop ziehen');
+        return;
+      }
+      const items = await navigator.clipboard.read();
+      for (const item of items) {
+        const imgType = item.types.find((t) => t.startsWith('image/'));
+        if (imgType) {
+          const blob = await item.getType(imgType);
+          const ext = imgType.split('/')[1] || 'png';
+          const file = new File([blob], `Zwischenablage.${ext}`, { type: imgType });
+          loadTracingFromFile(file);
+          return;
+        }
+      }
+      showNotice('Kein Bild in der Zwischenablage gefunden');
+    } catch {
+      showNotice('Zugriff auf Zwischenablage blockiert — bitte Bild per Drag & Drop auf die Fläche ziehen');
+    }
+  }, [loadTracingFromFile, showNotice]);
+
   const handlePaste = useCallback(async () => {
     let itemsToInsert = clipboardMarkup;
     let offset = 18;
+    let foundOsSvgText = false;
 
     try {
       const osText = await navigator.clipboard.readText();
@@ -167,9 +226,27 @@ function AppContent() {
       ) {
         itemsToInsert = [trimmed];
         offset = 0;
+        foundOsSvgText = true;
       }
     } catch {
       // Clipboard read permission not granted; use internal clipboard
+    }
+
+    if (!foundOsSvgText && typeof navigator.clipboard?.read === 'function') {
+      try {
+        const clipItems = await navigator.clipboard.read();
+        for (const item of clipItems) {
+          const imgType = item.types.find((t) => t.startsWith('image/'));
+          if (imgType) {
+            const blob = await item.getType(imgType);
+            const ext = imgType.split('/')[1] || 'png';
+            loadTracingFromFile(new File([blob], `Zwischenablage.${ext}`, { type: imgType }));
+            return;
+          }
+        }
+      } catch {
+        // Ignore clipboard image read failure
+      }
     }
 
     if (!itemsToInsert || itemsToInsert.length === 0) {
@@ -187,7 +264,7 @@ function AppContent() {
         } eingefügt`
       );
     }
-  }, [clipboardMarkup, code, commitCode, showNotice]);
+  }, [clipboardMarkup, code, commitCode, loadTracingFromFile, showNotice]);
 
   const handleDuplicate = useCallback(() => {
     if (selectedEids.length === 0) return;
@@ -286,6 +363,27 @@ function AppContent() {
     setHoveredEid(null);
     showNotice(`Vorlage „${tpl.name}“ geladen`);
   };
+
+  const handleStartTransparentCanvas = useCallback(
+    (matchImageSize = false) => {
+      let w = 800;
+      let h = 600;
+      if (matchImageSize && tracingImage) {
+        const nw = Math.max(1, tracingImage.naturalWidth || 800);
+        const nh = Math.max(1, tracingImage.naturalHeight || 600);
+        const maxSide = Math.max(nw, nh);
+        const normScale = maxSide > 800 ? 800 / maxSide : maxSide < 300 ? 600 / maxSide : 1;
+        w = Math.max(40, Math.round(nw * normScale));
+        h = Math.max(40, Math.round(nh * normScale));
+        setTracingImage((prev) => (prev ? { ...prev, scale: 1, offsetX: 0, offsetY: 0 } : prev));
+      }
+      const nextCode = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${w} ${h}" width="${w}" height="${h}">\n</svg>`;
+      commitCode(nextCode, []);
+      setHoveredEid(null);
+      showNotice(`Transparente Zeichenfläche (${w}×${h}) erstellt`);
+    },
+    [tracingImage, commitCode, showNotice]
+  );
 
   const handleImportApply = (importedCode: string, mode: 'replace' | 'append') => {
     if (mode === 'replace') {
@@ -429,12 +527,13 @@ function AppContent() {
     };
   }, []);
 
-  // Support drag & drop .svg files onto the workspace
+  // Support drag & drop .svg files (load SVG) or raster images (load tracing underlay)
   const handleDropFile = (e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault();
     const file = e.dataTransfer.files?.[0];
     if (!file) return;
-    if (file.name.toLowerCase().endsWith('.svg') || file.type.includes('svg')) {
+    const lowerName = file.name.toLowerCase();
+    if (lowerName.endsWith('.svg') || file.type === 'image/svg+xml') {
       const reader = new FileReader();
       reader.onload = () => {
         if (typeof reader.result === 'string') {
@@ -446,6 +545,11 @@ function AppContent() {
         }
       };
       reader.readAsText(file);
+    } else if (
+      file.type.startsWith('image/') ||
+      /\.(png|jpe?g|webp|gif|bmp)$/i.test(lowerName)
+    ) {
+      loadTracingFromFile(file);
     }
   };
 
@@ -539,6 +643,22 @@ function AppContent() {
               onUngroup={handleUngroup}
               hasClipboard={clipboardMarkup.length > 0}
               onSwitchToSelect={() => setActiveTool('select')}
+              tracingImage={tracingImage}
+              onLoadTracingFile={loadTracingFromFile}
+              onPasteTracingClipboard={pasteTracingFromClipboard}
+              onUpdateTracing={(partial) =>
+                setTracingImage((prev) => (prev ? { ...prev, ...partial } : prev))
+              }
+              onResetTracingTransform={() =>
+                setTracingImage((prev) =>
+                  prev ? { ...prev, scale: 1, offsetX: 0, offsetY: 0 } : prev
+                )
+              }
+              onClearTracing={() => {
+                setTracingImage(null);
+                showNotice('Pausvorlage entfernt');
+              }}
+              onStartTransparentCanvas={handleStartTransparentCanvas}
             />
 
             <ToolRail
