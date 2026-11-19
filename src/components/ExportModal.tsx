@@ -154,34 +154,50 @@ export const ExportModal: React.FC<ExportModalProps> = ({ open, onClose, svgCode
           </div>
         </div>
 
-        <div className="px-5 py-3 bg-slate-50 border-t border-slate-200 flex items-center justify-end gap-2">
-          <button
-            type="button"
-            onClick={onClose}
-            className="px-3.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-200/60 rounded-lg cursor-pointer"
-          >
-            Schließen
-          </button>
-          <button
-            type="button"
-            onClick={() =>
-              downloadTextFile(cleanSvg, `${safeFileBase}.svg`, 'image/svg+xml;charset=utf-8')
-            }
-            className="flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-medium text-slate-800 bg-white border border-slate-300 hover:bg-slate-100 rounded-lg cursor-pointer"
-          >
-            <Download className="w-3.5 h-3.5" />
-            <span>Als .svg speichern</span>
-          </button>
-          <button
-            type="button"
-            onClick={() =>
-              downloadTextFile(htmlOutput, `${safeFileBase}.html`, 'text/html;charset=utf-8')
-            }
-            className="flex items-center gap-1.5 px-4 py-1.5 text-xs font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg cursor-pointer"
-          >
-            <Download className="w-3.5 h-3.5" />
-            <span>Als .html speichern</span>
-          </button>
+        <div className="px-5 py-3 bg-slate-50 border-t border-slate-200 flex items-center justify-between gap-2 flex-wrap">
+          {typeof window !== 'undefined' && window.location.protocol !== 'file:' ? (
+            <a
+              href="./VektorStudio-Offline.html"
+              download="VektorStudio-Offline.html"
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 hover:text-slate-900 hover:bg-slate-200/60 rounded-lg transition-colors"
+              title="Lädt VektorStudio als einzelne, komplett offline nutzbare HTML-Datei herunter"
+            >
+              <Download className="w-3.5 h-3.5" />
+              <span>Offline-App (.html)</span>
+            </a>
+          ) : (
+            <span className="text-[11px] text-slate-500">Offline-Einzeldatei aktiv</span>
+          )}
+
+          <div className="flex items-center gap-2 ml-auto">
+            <button
+              type="button"
+              onClick={onClose}
+              className="px-3.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-200/60 rounded-lg cursor-pointer"
+            >
+              Schließen
+            </button>
+            <button
+              type="button"
+              onClick={() =>
+                downloadTextFile(cleanSvg, `${safeFileBase}.svg`, 'image/svg+xml;charset=utf-8')
+              }
+              className="flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-medium text-slate-800 bg-white border border-slate-300 hover:bg-slate-100 rounded-lg cursor-pointer"
+            >
+              <Download className="w-3.5 h-3.5" />
+              <span>Als .svg speichern</span>
+            </button>
+            <button
+              type="button"
+              onClick={() =>
+                downloadTextFile(htmlOutput, `${safeFileBase}.html`, 'text/html;charset=utf-8')
+              }
+              className="flex items-center gap-1.5 px-4 py-1.5 text-xs font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg cursor-pointer"
+            >
+              <Download className="w-3.5 h-3.5" />
+              <span>Als .html speichern</span>
+            </button>
+          </div>
         </div>
       </div>
     </div>

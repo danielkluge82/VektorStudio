@@ -117,10 +117,10 @@ export default defineConfig(() => {
             'utf-8'
           );
 
-          const offlineDir = path.resolve(__dirname, 'offline');
-          fs.mkdirSync(offlineDir, {recursive: true});
+          const publicDir = path.resolve(__dirname, 'public');
+          fs.mkdirSync(publicDir, {recursive: true});
           fs.writeFileSync(
-            path.join(offlineDir, 'VektorStudio-Offline.html'),
+            path.join(publicDir, 'VektorStudio-Offline.html'),
             offlineHtml,
             'utf-8'
           );
