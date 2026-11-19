@@ -597,6 +597,7 @@ function AppContent() {
             <CodePane
               code={code}
               onChangeCode={(next) => commitCode(next)}
+              onClear={() => handleStartTransparentCanvas(false)}
               parseError={currentParsed.error}
               selectedTagsSummary={selectedTagsSummary}
               selectedEids={selectedEids}

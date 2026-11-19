@@ -1,10 +1,11 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Check, Copy, Sparkles, AlertTriangle } from 'lucide-react';
+import { Check, Copy, Sparkles, AlertTriangle, Eraser } from 'lucide-react';
 import { formatSvgCode, getElementLineRanges } from '../utils/svgDom';
 
 interface CodePaneProps {
   code: string;
   onChangeCode: (newCode: string) => void;
+  onClear: () => void;
   parseError: string | null;
   selectedTagsSummary: string;
   selectedEids: string[];
@@ -17,6 +18,7 @@ const VERTICAL_PAD_PX = 12;
 export const CodePane: React.FC<CodePaneProps> = ({
   code,
   onChangeCode,
+  onClear,
   parseError,
   selectedTagsSummary,
   selectedEids,
@@ -139,7 +141,16 @@ export const CodePane: React.FC<CodePaneProps> = ({
           )}
         </div>
 
-        <div className="flex items-center gap-1.5 shrink-0">
+        <div className="flex items-center gap-1 shrink-0">
+          <button
+            type="button"
+            onClick={onClear}
+            title="Code und Zeichenfläche komplett leeren (von 0 anfangen)"
+            className="flex items-center gap-1 px-2 py-1 text-[11px] font-medium text-slate-300 hover:text-red-300 hover:bg-slate-800 rounded transition-colors whitespace-nowrap cursor-pointer"
+          >
+            <Eraser className="w-3 h-3 text-slate-400" />
+            <span>Leeren</span>
+          </button>
           <button
             type="button"
             onClick={handleFormat}
