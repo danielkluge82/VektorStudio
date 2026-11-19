@@ -16,3 +16,10 @@
 ```bash
 npm install
 npm run dev
+```
+
+Für den Produktions-Build (inklusive eigenständiger Offline-HTML-Datei unter `dist/VektorStudio-Offline.html`):
+
+```bash
+npm run build
+```
