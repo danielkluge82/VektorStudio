@@ -116,14 +116,6 @@ export default defineConfig(() => {
             offlineHtml,
             'utf-8'
           );
-
-          const publicDir = path.resolve(__dirname, 'public');
-          fs.mkdirSync(publicDir, {recursive: true});
-          fs.writeFileSync(
-            path.join(publicDir, 'VektorStudio-Offline.html'),
-            offlineHtml,
-            'utf-8'
-          );
         },
       },
     ],
