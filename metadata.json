@@ -1,0 +1,6 @@
+{
+  "name": "VektorStudio — SVG Editor & Paint",
+  "description": "Interaktiver SVG-Editor und Vektor-Paint mit Live-Vorschau, Code-Synchronisation, Hover-Auswahl, Multi-Selektion und SVG/HTML-Export.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}
